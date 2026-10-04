@@ -1,0 +1,218 @@
+# Weather-advisory Standard Operating Procedures.
+# This file is the ONLY place advice lives. The bot never advises outside it.
+# Edit, save, ask again: it is re-read on every request, no restart needed.
+# Check your edit:  python -m app.engine   (from backend/, prints every SOP or the exact error)
+#
+# SOP fields
+#   id, title, category     identity; id is what the bot cites
+#   severity                info < low < moderate < high < critical
+#   activities              "*" (every activity) or a list of tags from the glossary below
+#   when                    condition tree: {all: [...]}, {any: [...]}, or {metric, op, value}
+#                           ops: >= > <= < ==    metrics: see METRICS in app/weather.py
+#   advice                  text; {metric_name} is filled with the live value
+#   lead: true              always shown first, above every other SOP
+#   fallback: true          applies only when no other SOP matched (no `when` needed)
+#   score                   fuzzy SOPs: comfort factors -> banded advice (instead of when/severity/advice)
+#
+# Conflict policy: every matching SOP is surfaced; lead first, then by severity.
+# The headline verdict comes from the most severe one (critical/high = avoid, moderate = caution, low/info = go).
+
+# Activity glossary: tag -> what counts. The language model may only answer with these tags,
+# so a new tag here (used by a new SOP) is understood immediately without code changes.
+activities:
+  cycling: bicycle or e-bike rides, biking to work or college, cycling for fitness
+  two_wheeler: motorbike, scooter, moped or other motorised two-wheeler rides
+  running: running, jogging, brisk fitness walks, outdoor workouts
+  hiking: hiking, trekking, trail or hill walks
+  outdoor_sports: cricket, football, tennis, badminton outdoors, other field or court sports
+  driving: driving a car, road trips, taking a cab or auto
+  walking_commute: walking to work, school or the market, waiting at bus stops
+  children_outdoors: taking children or babies outside, parks, playgrounds, school runs on foot
+  elderly_outdoors: older adults (grandparents, parents over 65) going or sitting outside
+  pet_walking: walking a dog or taking pets outside
+  picnic: picnics, outdoor meals, lounging in a park, garden or open lawn for leisure
+
+sops:
+  # ---------- general ----------
+  - id: SOP-GEN-01
+    title: Active heavy-rain weather system
+    category: general
+    severity: critical
+    lead: true
+    activities: "*"
+    # IMD calls 64.5-115.5 mm in 24h "heavy" and 115.6+ "very heavy". A system shows up as heavy
+    # rain already fallen, heavy rain coming, a multi-day total, or storms with damaging gusts.
+    # Any one of these is enough, even if the activity-specific numbers look mild on their own.
+    when:
+      any:
+        - {metric: rain_past24h_mm, op: ">=", value: 64.5}
+        - {metric: rain_next24h_mm, op: ">=", value: 64.5}
+        - {metric: rain_72h_mm, op: ">=", value: 115.6}
+        - all:
+            - {metric: thunder_in_window, op: "==", value: true}
+            - {metric: gust_max_kmh, op: ">=", value: 50}
+    advice: >-
+      A heavy-rain weather system is active here: {rain_past24h_mm} mm of rain in the last 24 hours,
+      {rain_next24h_mm} mm expected in the next 24 ({rain_72h_mm} mm across three days), gusts up to {gust_max_kmh} km/h.
+      Treat any outdoor plan as high risk. Postpone non-essential trips and outdoor activity, keep away from
+      flooded roads, underpasses and open drains, and check official IMD or local disaster-authority alerts before going out.
+
+  - id: SOP-GEN-02
+    title: No risk conditions triggered
+    category: general
+    severity: info
+    fallback: true
+    activities: "*"
+    advice: >-
+      None of our risk conditions are triggered for this plan in that window: up to {temp_max_c} °C
+      (feels like {feels_like_max_c} °C), {rain_prob_max_pct}% chance of rain, wind up to {wind_max_kmh} km/h,
+      UV up to {uv_max}. Conditions are within our limits.
+
+  # ---------- outdoor exercise ----------
+  - id: SOP-EX-01
+    title: Very high UV during exercise
+    category: exercise
+    severity: moderate
+    activities: [running, cycling, hiking, outdoor_sports]
+    when: {metric: uv_max, op: ">=", value: 8}
+    advice: >-
+      UV reaches {uv_max} (very high). Avoid unprotected exercise in the midday sun: use SPF 30+ sunscreen,
+      a cap and sunglasses, or move the session to early morning or after 5 pm.
+
+  - id: SOP-EX-02
+    title: Dangerous heat for exertion
+    category: exercise
+    severity: high
+    activities: [running, cycling, hiking, outdoor_sports]
+    when: {metric: feels_like_max_c, op: ">=", value: 41}
+    advice: >-
+      It will feel like {feels_like_max_c} °C, which is in the heat-danger range for physical exertion.
+      Do not do strenuous outdoor exercise in this window. Exercise indoors or wait for cooler hours, and drink water regularly.
+
+  - id: SOP-EX-03
+    title: Strong wind on two wheels
+    category: exercise
+    severity: high
+    activities: [cycling, two_wheeler]
+    when:
+      any:
+        - {metric: wind_max_kmh, op: ">=", value: 40}
+        - {metric: gust_max_kmh, op: ">=", value: 55}
+    advice: >-
+      Wind up to {wind_max_kmh} km/h with gusts to {gust_max_kmh} km/h is a safety risk on two wheels, not just discomfort:
+      crosswinds can push a rider into traffic. Avoid riding in this window. Take a car, bus or metro, or wait for the wind to drop.
+
+  - id: SOP-EX-04
+    title: Thunderstorm risk outdoors
+    category: exercise
+    severity: high
+    activities: [running, cycling, hiking, outdoor_sports, two_wheeler, walking_commute, picnic, children_outdoors, elderly_outdoors, pet_walking]
+    when: {metric: thunder_in_window, op: "==", value: true}
+    advice: >-
+      Thunderstorms are forecast in this window. Lightning makes open ground, hilltops, open water and isolated trees dangerous.
+      Postpone the activity, and if you are already outside, get into a building or a closed car.
+
+  - id: SOP-EX-05
+    title: Likely rain on runs and trails
+    category: exercise
+    severity: low
+    activities: [running, hiking]
+    when: {metric: rain_prob_max_pct, op: ">=", value: 60}
+    advice: >-
+      Rain chance peaks at {rain_prob_max_pct}%. Expect slippery paths and trails: wear shoes with grip,
+      shorten the route or stay on paved ground.
+
+  # ---------- travel ----------
+  - id: SOP-TR-01
+    title: Rain likely to delay travel
+    category: travel
+    severity: moderate
+    activities: [driving, two_wheeler, walking_commute, cycling]
+    when:
+      any:
+        - {metric: rain_prob_max_pct, op: ">=", value: 70}
+        - {metric: rain_window_mm, op: ">=", value: 10}
+    advice: >-
+      Rain chance peaks at {rain_prob_max_pct}% with {rain_window_mm} mm expected in this window. Expect delays and waterlogging:
+      leave extra time, check traffic and local alerts before setting off, and avoid underpasses that flood.
+
+  - id: SOP-TR-02
+    title: Heavy rain on two wheels
+    category: travel
+    severity: high
+    activities: [two_wheeler, cycling]
+    when: {metric: rain_window_mm, op: ">=", value: 15}
+    advice: >-
+      {rain_window_mm} mm of rain is expected in this window. That means poor visibility, slick roads and hidden potholes for riders.
+      Avoid riding through it. Use covered transport or wait for the rain to ease.
+
+  - id: SOP-TR-03
+    title: Damaging gusts while driving
+    category: travel
+    severity: moderate
+    activities: [driving]
+    when: {metric: gust_max_kmh, op: ">=", value: 70}
+    advice: >-
+      Gusts up to {gust_max_kmh} km/h can bring down branches and hoardings and push vehicles sideways.
+      Drive slower, keep both hands on the wheel and don't park under trees or signboards.
+
+  # ---------- vulnerable groups ----------
+  - id: SOP-VUL-01
+    title: Heat risk for children and older adults
+    category: vulnerable
+    severity: high
+    activities: [children_outdoors, elderly_outdoors]
+    when: {metric: feels_like_max_c, op: ">=", value: 35}
+    advice: >-
+      It will feel like {feels_like_max_c} °C. Children and older adults overheat faster than other people.
+      Keep outdoor time short and in the shade, give water often, and plan outings for early morning or evening.
+
+  - id: SOP-VUL-02
+    title: Cold risk for children and older adults
+    category: vulnerable
+    severity: moderate
+    activities: [children_outdoors, elderly_outdoors]
+    when: {metric: feels_like_min_c, op: "<=", value: 5}
+    advice: >-
+      It will feel as cold as {feels_like_min_c} °C. Dress children and older adults in layers with head and hand cover,
+      and keep time outdoors short.
+
+  - id: SOP-VUL-03
+    title: Hot ground for pets
+    category: vulnerable
+    severity: moderate
+    activities: [pet_walking]
+    when: {metric: temp_max_c, op: ">=", value: 32}
+    advice: >-
+      Air temperature reaches {temp_max_c} °C, and asphalt gets much hotter than the air and can burn paws.
+      Walk pets early morning or after sunset, keep to grass or shade, and carry water.
+
+  # ---------- leisure (fuzzy) ----------
+  # "Is it a good day for a picnic?" has no single threshold. Instead we score comfort across
+  # four factors and band the total. The judgement is written here, not made by the model.
+  - id: SOP-LEI-01
+    title: Picnic and outdoor-leisure comfort
+    category: leisure
+    activities: [picnic]
+    score:
+      factors:
+        - {metric: temp_max_c, good: [20, 32], label: "pleasant temperature (20-32 °C)"}
+        - {metric: rain_prob_max_pct, good: [0, 30], label: "low rain chance (30% or less)"}
+        - {metric: wind_max_kmh, good: [0, 20], label: "light wind (20 km/h or less)"}
+        - {metric: uv_max, good: [0, 7], label: "moderate sun (UV 7 or less)"}
+      bands:
+        - min: 4
+          severity: info
+          advice: >-
+            A good day for it: comfort score {score}/{max_score}. Temperature up to {temp_max_c} °C,
+            {rain_prob_max_pct}% rain chance, wind up to {wind_max_kmh} km/h. Enjoy, and bring water and shade.
+        - min: 2
+          severity: low
+          advice: >-
+            A mixed day: comfort score {score}/{max_score}, falling short on {misses}.
+            Doable with a backup plan: choose a spot near shelter and keep an eye on the sky.
+        - min: 0
+          severity: moderate
+          advice: >-
+            Not a good day for it: comfort score {score}/{max_score}, falling short on {misses}.
+            Consider an indoor alternative or another day.
